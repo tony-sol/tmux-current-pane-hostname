@@ -5,7 +5,10 @@ get_info() {
 	local cmd=$(__current_pane_command)
 	if __ssh_cmd "$cmd"; then
 		cmd=$(echo "$cmd" | grep -E 'ssh' | sed -E 's/^.*ssh //')
-		IFS=' ' read -r host port user <<<$(__get_remote_info "$cmd")
+		IFS=' ' read -r host port user <<<$(__get_ssh_info "$cmd")
+	elif __mosh_cmd "$cmd"; then
+		cmd=$(echo "$cmd" | grep -E 'mosh' | sed -E 's/^.*mosh(-client)? //')
+		IFS=' ' read -r host port user <<<$(__get_mosh_info "$cmd")
 	elif __containered_cmd "$cmd"; then
 		cmd=$(echo "$cmd" | grep -E 'docker|podman' | sed -E 's/^[[:blank:]]* //')
 		IFS=' ' read -r host user <<<$(__get_container_info "$cmd")
@@ -41,17 +44,26 @@ ssh_connected() {
 	__ssh_cmd "$cmd"
 }
 
+mosh_connected() {
+	local cmd=$(__current_pane_command)
+	__mosh_cmd "$cmd"
+}
+
 containered() {
 	local cmd=$(__current_pane_command)
 	__containered_cmd "$cmd"
 }
 
 __ssh_cmd() {
-	[[ $1 =~ (^|^[[:blank:]]*|/?)ssh[[:blank:]] ]] || [[ $1 =~ (^|^[[:blank:]]*|/?)sshpass[[:blank:]] ]]
+	[[ $1 =~ (^|^[[:blank:]]*|/)ssh[[:blank:]] ]] || [[ $1 =~ (^|^[[:blank:]]*|/)sshpass[[:blank:]] ]]
+}
+
+__mosh_cmd() {
+	[[ $1 =~ (^|^[[:blank:]]*|/)mosh[[:blank:]] ]] || [[ $1 =~ (^|^[[:blank:]]*|/)mosh-client[[:blank:]] ]]
 }
 
 __containered_cmd() {
-	[[ $1 =~ (^|^[[:blank:]]*|/?)docker[[:blank:]] ]] || [[ $1 =~ (^|^[[:blank:]]*|/?)podman[[:blank:]] ]]
+	[[ $1 =~ (^|^[[:blank:]]*|/)docker[[:blank:]] ]] || [[ $1 =~ (^|^[[:blank:]]*|/)podman[[:blank:]] ]]
 }
 
 __current_pane_command() {
@@ -71,7 +83,7 @@ __current_pane_command() {
 	echo "$cmd"
 }
 
-__get_remote_info() {
+__get_ssh_info() {
 	local cmd="$1"
 	# Fetch configuration with given cmd
 	# Depending of ssh version, configuration output may or may not contain `host` directive
@@ -79,12 +91,49 @@ __get_remote_info() {
 	ssh -TGN $cmd 2>/dev/null | grep -E -e '^host(name)?\s' -e '^port\s' -e '^user\s' | sort --unique --key 1,1.4 | cut -f 2 -d ' ' | xargs
 }
 
+# @see https://github.com/mobile-shell/mosh/blob/master/scripts/mosh.pl#L465
+__get_mosh_info() {
+	local cmd="$1"
+
+	# @see https://tldp.org/LDP/abs/html/parameter-substitution.html
+	shopt -s extglob
+
+	# @see https://github.com/mobile-shell/mosh/blob/1105d481bb9143dad43adf768f58da7b029fd39c/scripts/mosh.pl#L465
+	# ip and port placed after pipe separator in cmd
+	local ip port
+	IFS=' ' read -r ip port <<<"${cmd#*|*([[:blank:]])}"
+
+	# Clean cmd from ip-port...
+	cmd="${cmd%%*([[:blank:]])|*}"
+	# ...and sanitize from leading #
+	cmd="${cmd##*-#*([[:blank:]])}"
+
+	# Fetch initial ssh command
+	local ssh
+	ssh="${cmd%%[[:blank:]]*}"
+
+	# Fetch extra ssh options
+	local ssh_options
+	if [[ $cmd =~ '--ssh' ]]; then
+		ssh_options="${cmd##**([[:blank:]])--ssh*([[:blank:]])?(=)}"
+		# @hack ssh has no long flags, so `--` means mosh's flag
+		ssh_options="${ssh_options%%*([[:blank:]])--*}"
+		# First word is ssh binary
+		ssh_options="${ssh_options#*[[:blank:]]}"
+	fi
+
+	local host user
+	IFS=' ' read -r host _ user <<<$(__get_ssh_info "$ssh_options $ssh")
+	echo "${host:-$ip} $port $user"
+}
+
 __get_container_info() {
 	local cmd="$1"
 
+	local container
 	local runner=${cmd%% *}
 	if [[ $cmd =~ ' --name' ]]; then
-		local container=$(echo ${cmd##* --name} | cut -f 1 -d ' ')
+		container=$(echo ${cmd##* --name} | cut -f 1 -d ' ')
 		container=${container##*=}
 	else
 		# @TODO get dynamic named container
