@@ -5,7 +5,10 @@ get_info() {
 	local cmd=$(__current_pane_command)
 	if __ssh_cmd "$cmd"; then
 		cmd=$(echo "$cmd" | grep -E 'ssh' | sed -E 's/^.*ssh //')
-		IFS=' ' read -r host port user <<<$(__get_remote_info "$cmd")
+		IFS=' ' read -r host port user <<<$(__get_ssh_info "$cmd")
+	elif __mosh_cmd "$cmd"; then
+		cmd=$(echo "$cmd" | grep -E 'mosh' | sed -E 's/^.*mosh(-client)? //')
+		IFS=' ' read -r host port user <<<$(__get_mosh_info "$cmd")
 	elif __containered_cmd "$cmd"; then
 		cmd=$(echo "$cmd" | grep -E 'docker|podman' | sed -E 's/^[[:blank:]]* //')
 		IFS=' ' read -r host user <<<$(__get_container_info "$cmd")
@@ -41,6 +44,11 @@ ssh_connected() {
 	__ssh_cmd "$cmd"
 }
 
+mosh_connected() {
+	local cmd=$(__current_pane_command)
+	__mosh_cmd "$cmd"
+}
+
 containered() {
 	local cmd=$(__current_pane_command)
 	__containered_cmd "$cmd"
@@ -48,6 +56,10 @@ containered() {
 
 __ssh_cmd() {
 	[[ $1 =~ (^|^[[:blank:]]*|/?)ssh[[:blank:]] ]] || [[ $1 =~ (^|^[[:blank:]]*|/?)sshpass[[:blank:]] ]]
+}
+
+__mosh_cmd() {
+	[[ $1 =~ (^|^[[:blank:]]*|/?)mosh[[:blank:]] ]] || [[ $1 =~ (^|^[[:blank:]]*|/?)mosh-client[[:blank:]] ]]
 }
 
 __containered_cmd() {
@@ -71,18 +83,49 @@ __current_pane_command() {
 	echo "$cmd"
 }
 
-__get_remote_info() {
+__get_ssh_info() {
 	local cmd="$1"
 	# Fetch configuration with given cmd
 	ssh -TGN $cmd 2>/dev/null | grep -E -e '^hostname\s' -e '^port\s' -e '^user\s' | sort | cut -f 2 -d ' ' | xargs
 }
 
+# @see https://github.com/mobile-shell/mosh/blob/master/scripts/mosh.pl#L465
+__get_mosh_info() {
+	local cmd="$1"
+
+	# ip and port placed after pipe separator in cmd
+	local ip port
+	IFS=' ' read -r ip port <<<"${cmd##*|[[:blank:]]}"
+
+	# Clean cmd from ip-port
+	cmd="${cmd%%|*}"
+
+	# Fetch initial ssh command
+	local ssh
+	ssh="${cmd#*#[[:blank:]]}"
+	ssh="${ssh%%[[:blank:]]*}"
+
+	# Fetch extra ssh options
+	local ssh_options
+	if [[ $cmd =~ ' --ssh' ]]; then
+		ssh_options="${cmd##* --ssh}"
+		ssh_options="${ssh_options/[[:blank:]]ssh[[:blank:]]/}"
+		# @bug must trim short flags after `--ssh`
+		ssh_options="${ssh_options%%--*}"
+	fi
+
+	local host user
+	IFS=' ' read -r host _ user <<<$(__get_ssh_info "$ssh_options $ssh")
+	echo "${host:-$ip} $port $user"
+}
+
 __get_container_info() {
 	local cmd="$1"
 
+	local container
 	local runner=${cmd%% *}
 	if [[ $cmd =~ ' --name' ]]; then
-		local container=$(echo ${cmd##* --name} | cut -f 1 -d ' ')
+		container=$(echo ${cmd##* --name} | cut -f 1 -d ' ')
 		container=${container##*=}
 	else
 		# @TODO get dynamic named container
