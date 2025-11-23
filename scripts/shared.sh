@@ -103,10 +103,16 @@ __get_mosh_info() {
 	local ip port
 	IFS=' ' read -r ip port <<<"${cmd#*|*([[:blank:]])}"
 
+printf "/%s/" "$cmd" > /dev/pts/8
+printf "/%s/" "$ip" > /dev/pts/8
+printf "/%s/" "$port" > /dev/pts/8
+
 	# Clean cmd from ip-port...
 	cmd="${cmd%%*([[:blank:]])|*}"
 	# ...and sanitize from leading #
 	cmd="${cmd##*-#*([[:blank:]])}"
+
+printf ">\t/%s/" "$cmd" > /dev/pts/8
 
 	# Fetch initial ssh command
 	local ssh
@@ -120,6 +126,7 @@ __get_mosh_info() {
 		ssh_options="${ssh_options%%*([[:blank:]])--*}"
 		# First word is ssh binary
 		ssh_options="${ssh_options#*[[:blank:]]}"
+printf ">>>>\t/%s/" "$ssh_options" > /dev/pts/8
 	fi
 
 	local host user
